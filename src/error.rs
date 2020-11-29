@@ -11,15 +11,7 @@ use yaml_rust::scanner::{self, Marker, ScanError};
 
 /// This type represents all possible errors that can occur when serializing or
 /// deserializing YAML data.
-pub struct Error(Box<ErrorImpl>);
-
-/// Alias for a `Result` with the error type `serde_yaml::Error`.
-pub type Result<T> = result::Result<T, Error>;
-
-/// This type represents all possible errors that can occur when serializing or
-/// deserializing a value using YAML.
-#[derive(Debug)]
-pub enum ErrorImpl {
+pub enum Error {
     Message(String, Option<Pos>),
 
     Emit(emitter::EmitError),
@@ -32,6 +24,9 @@ pub enum ErrorImpl {
     MoreThanOneDocument,
     RecursionLimitExceeded,
 }
+
+/// Alias for a `Result` with the error type `serde_yaml::Error`.
+pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Debug)]
 pub struct Pos {
@@ -94,48 +89,48 @@ impl Error {
     /// assert_eq!(location.column(), 1);
     /// ```
     pub fn location(&self) -> Option<Location> {
-        match self.0.as_ref() {
-            ErrorImpl::Message(_, Some(pos)) => Some(Location::from_marker(&pos.marker)),
-            ErrorImpl::Scan(scan) => Some(Location::from_marker(scan.marker())),
+        match self {
+            Error::Message(_, Some(pos)) => Some(Location::from_marker(&pos.marker)),
+            Error::Scan(scan) => Some(Location::from_marker(scan.marker())),
             _ => None,
         }
     }
 }
 
 pub(crate) fn end_of_stream() -> Error {
-    Error(Box::new(ErrorImpl::EndOfStream))
+    Error::EndOfStream
 }
 
 pub(crate) fn more_than_one_document() -> Error {
-    Error(Box::new(ErrorImpl::MoreThanOneDocument))
+    Error::MoreThanOneDocument
 }
 
 pub(crate) fn io(err: io::Error) -> Error {
-    Error(Box::new(ErrorImpl::Io(err)))
+    Error::Io(err)
 }
 
 pub(crate) fn emitter(err: emitter::EmitError) -> Error {
-    Error(Box::new(ErrorImpl::Emit(err)))
+    Error::Emit(err)
 }
 
 pub(crate) fn scanner(err: scanner::ScanError) -> Error {
-    Error(Box::new(ErrorImpl::Scan(err)))
+    Error::Scan(err)
 }
 
 pub(crate) fn str_utf8(err: str::Utf8Error) -> Error {
-    Error(Box::new(ErrorImpl::Utf8(err)))
+    Error::Utf8(err)
 }
 
 pub(crate) fn string_utf8(err: string::FromUtf8Error) -> Error {
-    Error(Box::new(ErrorImpl::FromUtf8(err)))
+    Error::FromUtf8(err)
 }
 
 pub(crate) fn recursion_limit_exceeded() -> Error {
-    Error(Box::new(ErrorImpl::RecursionLimitExceeded))
+    Error::RecursionLimitExceeded
 }
 
 pub(crate) fn fix_marker(mut error: Error, marker: Marker, path: Path) -> Error {
-    if let ErrorImpl::Message(_, none @ None) = error.0.as_mut() {
+    if let Error::Message(_, ref mut none @ None) = &mut error {
         *none = Some(Pos {
             marker,
             path: path.to_string(),
@@ -148,27 +143,27 @@ impl error::Error for Error {
     // TODO: deprecated, remove in next major version.
     #[allow(deprecated)]
     fn description(&self) -> &str {
-        match self.0.as_ref() {
-            ErrorImpl::Message(msg, _) => msg,
-            ErrorImpl::Emit(_) => "emit error",
-            ErrorImpl::Scan(_) => "scan error",
-            ErrorImpl::Io(err) => err.description(),
-            ErrorImpl::Utf8(err) => err.description(),
-            ErrorImpl::FromUtf8(err) => err.description(),
-            ErrorImpl::EndOfStream => "EOF while parsing a value",
-            ErrorImpl::MoreThanOneDocument => {
+        match self {
+            Error::Message(msg, _) => &msg,
+            Error::Emit(_) => "emit error",
+            Error::Scan(_) => "scan error",
+            Error::Io(err) => err.description(),
+            Error::Utf8(err) => err.description(),
+            Error::FromUtf8(err) => err.description(),
+            Error::EndOfStream => "EOF while parsing a value",
+            Error::MoreThanOneDocument => {
                 "deserializing from YAML containing more than one document is not supported"
             }
-            ErrorImpl::RecursionLimitExceeded => "recursion limit exceeded",
+            Error::RecursionLimitExceeded => "recursion limit exceeded",
         }
     }
 
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self.0.as_ref() {
-            ErrorImpl::Scan(err) => Some(err),
-            ErrorImpl::Io(err) => Some(err),
-            ErrorImpl::Utf8(err) => Some(err),
-            ErrorImpl::FromUtf8(err) => Some(err),
+        match self {
+            Error::Scan(err) => Some(err),
+            Error::Io(err) => Some(err),
+            Error::Utf8(err) => Some(err),
+            Error::FromUtf8(err) => Some(err),
             _ => None,
         }
     }
@@ -176,26 +171,26 @@ impl error::Error for Error {
 
 impl Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self.0.as_ref() {
-            ErrorImpl::Message(msg, None) => Display::fmt(msg, f),
-            ErrorImpl::Message(msg, Some(Pos { marker, path })) => {
+        match self {
+            Error::Message(msg, None) => Display::fmt(&msg, f),
+            Error::Message(msg, Some(Pos { marker, path })) => {
                 if path == "." {
-                    write!(f, "{}", ScanError::new(*marker, msg))
+                    write!(f, "{}", ScanError::new(*marker, &msg))
                 } else {
-                    write!(f, "{}: {}", path, ScanError::new(*marker, msg))
+                    write!(f, "{}: {}", path, ScanError::new(*marker, &msg))
                 }
             }
-            ErrorImpl::Emit(emitter::EmitError::FmtError(_)) => f.write_str("yaml-rust fmt error"),
-            ErrorImpl::Emit(emitter::EmitError::BadHashmapKey) => f.write_str("bad hash map key"),
-            ErrorImpl::Scan(err) => Display::fmt(err, f),
-            ErrorImpl::Io(err) => Display::fmt(err, f),
-            ErrorImpl::Utf8(err) => Display::fmt(err, f),
-            ErrorImpl::FromUtf8(err) => Display::fmt(err, f),
-            ErrorImpl::EndOfStream => f.write_str("EOF while parsing a value"),
-            ErrorImpl::MoreThanOneDocument => f.write_str(
+            Error::Emit(emitter::EmitError::FmtError(_)) => f.write_str("yaml-rust fmt error"),
+            Error::Emit(emitter::EmitError::BadHashmapKey) => f.write_str("bad hash map key"),
+            Error::Scan(err) => Display::fmt(&err, f),
+            Error::Io(err) => Display::fmt(&err, f),
+            Error::Utf8(err) => Display::fmt(&err, f),
+            Error::FromUtf8(err) => Display::fmt(&err, f),
+            Error::EndOfStream => f.write_str("EOF while parsing a value"),
+            Error::MoreThanOneDocument => f.write_str(
                 "deserializing from YAML containing more than one document is not supported",
             ),
-            ErrorImpl::RecursionLimitExceeded => f.write_str("recursion limit exceeded"),
+            Error::RecursionLimitExceeded => f.write_str("recursion limit exceeded"),
         }
     }
 }
@@ -204,22 +199,22 @@ impl Display for Error {
 // end up seeing this representation because it is what unwrap() shows.
 impl Debug for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        match self.0.as_ref() {
-            ErrorImpl::Message(msg, pos) => formatter
+        match self {
+            Error::Message(msg, pos) => formatter
                 .debug_tuple("Message")
-                .field(msg)
-                .field(pos)
+                .field(&msg)
+                .field(&pos)
                 .finish(),
-            ErrorImpl::Emit(emit) => formatter.debug_tuple("Emit").field(emit).finish(),
-            ErrorImpl::Scan(scan) => formatter.debug_tuple("Scan").field(scan).finish(),
-            ErrorImpl::Io(io) => formatter.debug_tuple("Io").field(io).finish(),
-            ErrorImpl::Utf8(utf8) => formatter.debug_tuple("Utf8").field(utf8).finish(),
-            ErrorImpl::FromUtf8(from_utf8) => {
-                formatter.debug_tuple("FromUtf8").field(from_utf8).finish()
+            Error::Emit(emit) => formatter.debug_tuple("Emit").field(&emit).finish(),
+            Error::Scan(scan) => formatter.debug_tuple("Scan").field(&scan).finish(),
+            Error::Io(io) => formatter.debug_tuple("Io").field(&io).finish(),
+            Error::Utf8(utf8) => formatter.debug_tuple("Utf8").field(&utf8).finish(),
+            Error::FromUtf8(from_utf8) => {
+                formatter.debug_tuple("FromUtf8").field(&from_utf8).finish()
             }
-            ErrorImpl::EndOfStream => formatter.debug_tuple("EndOfStream").finish(),
-            ErrorImpl::MoreThanOneDocument => formatter.debug_tuple("MoreThanOneDocument").finish(),
-            ErrorImpl::RecursionLimitExceeded => {
+            Error::EndOfStream => formatter.debug_tuple("EndOfStream").finish(),
+            Error::MoreThanOneDocument => formatter.debug_tuple("MoreThanOneDocument").finish(),
+            Error::RecursionLimitExceeded => {
                 formatter.debug_tuple("RecursionLimitExceeded").finish()
             }
         }
@@ -228,12 +223,12 @@ impl Debug for Error {
 
 impl ser::Error for Error {
     fn custom<T: Display>(msg: T) -> Self {
-        Error(Box::new(ErrorImpl::Message(msg.to_string(), None)))
+        Error::Message(msg.to_string(), None)
     }
 }
 
 impl de::Error for Error {
     fn custom<T: Display>(msg: T) -> Self {
-        Error(Box::new(ErrorImpl::Message(msg.to_string(), None)))
+        Error::Message(msg.to_string(), None)
     }
 }
